@@ -184,5 +184,5 @@ plt.show()  # 显示所有图像
 # 保存生成的图像
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 for i, img in enumerate(output.images):
-    img.save(os.path.join(OUTPUT_DIR, f"whole_image_{i+1}.png"))
+    img.save(os.path.join(OUTPUT_DIR, f"global_image_{i+1}.png"))
 print(f"生成的图像已保存到 {OUTPUT_DIR} 目录")
