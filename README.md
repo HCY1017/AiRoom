@@ -32,15 +32,15 @@ cd AiRoom
 
 ```bash
 # 使用Conda创建虚拟环境
-conda create -n Designgenie python=3.8
-conda activate Designgenie
+conda create -n Airoom python=3.10
+conda activate Airoom
 
 # 或使用venv创建虚拟环境
-python -m venv Designgenie
+python -m venv Airoom
 # Windows激活
-Designgenie\Scripts\activate
+Airoom\Scripts\activate
 # Linux/Mac激活
-source Designgenie/bin/activate
+source Airoom/bin/activate
 ```
 
 3. 安装依赖包：
