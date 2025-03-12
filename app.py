@@ -119,6 +119,41 @@ def load_models():
 def get_mask_from_segmentation_map(seg_map):
     """从分割图生成掩码，每个类别对应一个掩码"""
     masks, labels, label_names = [], [], []
+    
+    # 定义ADE20K标签的中文翻译
+    chinese_labels = {
+        "wall": "墙壁", "building": "建筑", "sky": "天空", "floor": "地板", "tree": "树",
+        "ceiling": "天花板", "road": "道路", "bed": "床", "windowpane": "窗户", "grass": "草地",
+        "cabinet": "柜子", "sidewalk": "人行道", "person": "人", "earth": "土地", "door": "门",
+        "table": "桌子", "mountain": "山", "plant": "植物", "curtain": "窗帘", "chair": "椅子",
+        "car": "汽车", "water": "水", "painting": "画", "sofa": "沙发", "shelf": "架子",
+        "house": "房子", "sea": "海", "mirror": "镜子", "rug": "地毯", "field": "田野",
+        "armchair": "扶手椅", "seat": "座位", "fence": "栅栏", "desk": "书桌", "rock": "岩石",
+        "wardrobe": "衣柜", "lamp": "灯", "bathtub": "浴缸", "railing": "栏杆", "cushion": "靠垫",
+        "base": "底座", "box": "盒子", "column": "柱子", "signboard": "招牌", "chest of drawers": "抽屉柜",
+        "counter": "柜台", "sand": "沙子", "sink": "水槽", "skyscraper": "摩天大楼", "fireplace": "壁炉",
+        "refrigerator": "冰箱", "grandstand": "看台", "path": "小路", "stairs": "楼梯", "runway": "跑道",
+        "case": "箱子", "pool table": "台球桌", "pillow": "枕头", "screen door": "纱门", "stairway": "阶梯",
+        "river": "河流", "bridge": "桥", "bookcase": "书柜", "blind": "百叶窗", "coffee table": "咖啡桌",
+        "toilet": "马桶", "flower": "花", "book": "书", "hill": "山丘", "bench": "长凳",
+        "countertop": "台面", "stove": "炉子", "palm": "棕榈树", "kitchen island": "厨房中岛", "computer": "电脑",
+        "swivel chair": "旋转椅", "boat": "船", "bar": "吧台", "arcade machine": "街机", "hovel": "小屋",
+        "bus": "公交车", "towel": "毛巾", "light": "灯光", "truck": "卡车", "tower": "塔",
+        "chandelier": "吊灯", "awning": "遮阳篷", "streetlight": "路灯", "booth": "摊位", "television receiver": "电视机",
+        "airplane": "飞机", "dirt track": "泥路", "apparel": "服装", "pole": "杆子", "land": "陆地",
+        "bannister": "栏杆", "escalator": "自动扶梯", "ottoman": "脚凳", "bottle": "瓶子", "buffet": "自助餐",
+        "poster": "海报", "stage": "舞台", "van": "货车", "ship": "轮船", "fountain": "喷泉",
+        "conveyer belt": "传送带", "canopy": "天篷", "washer": "洗衣机", "plaything": "玩具", "swimming pool": "游泳池",
+        "stool": "凳子", "barrel": "桶", "basket": "篮子", "waterfall": "瀑布", "tent": "帐篷",
+        "bag": "包", "minibike": "小型摩托车", "cradle": "摇篮", "oven": "烤箱", "ball": "球",
+        "food": "食物", "step": "台阶", "tank": "水箱", "trade name": "商标", "microwave": "微波炉",
+        "pot": "锅", "animal": "动物", "bicycle": "自行车", "lake": "湖", "dishwasher": "洗碗机",
+        "screen": "屏幕", "blanket": "毯子", "sculpture": "雕塑", "hood": "引擎盖", "sconce": "壁灯",
+        "vase": "花瓶", "traffic light": "交通灯", "tray": "托盘", "ashcan": "垃圾桶", "fan": "风扇",
+        "pier": "码头", "crt screen": "显示器", "plate": "盘子", "monitor": "显示器", "bulletin board": "公告板",
+        "shower": "淋浴", "radiator": "暖气片", "glass": "玻璃", "clock": "时钟", "flag": "旗帜"
+    }
+    
     for label in range(150):  # ADE20K数据集有150个类别
         mask = np.ones((seg_map.shape[0], seg_map.shape[1]), dtype=np.uint8)
         indices = (seg_map == label)
@@ -126,7 +161,15 @@ def get_mask_from_segmentation_map(seg_map):
         if indices.sum() > 0:  # 如果存在该类别
             masks.append(mask)
             labels.append(label)
-            label_names.append(f"{label}: {LABELS[str(label)]}")
+            
+            # 获取英文标签
+            english_label = LABELS[str(label)]
+            
+            # 查找中文翻译，如果没有则使用英文
+            chinese_label = chinese_labels.get(english_label, english_label)
+            
+            # 添加带有中文翻译的标签
+            label_names.append(f"{label}: {english_label} - {chinese_label}")
     
     print(f"创建了 {len(masks)} 个掩码")
     for idx, label in enumerate(labels):
@@ -186,6 +229,10 @@ def adjust_global_style(prompt, negative_prompt, room_type, style_theme, num_ste
     
     # 生成控制图像
     control_image = mlsd_processor(image)
+    
+    # 提取英文部分（去除中文描述）
+    room_type = room_type.split(" - ")[0]
+    style_theme = style_theme.split(" - ")[0]
     
     # 构建完整提示词，结合房间类型和风格主题
     full_prompt = f"A {style_theme} style {room_type}, {prompt}"
@@ -251,6 +298,10 @@ def adjust_local_style(prompt, negative_prompt, mask_label, room_type, style_the
     mask = torch.Tensor(masks[mask_id])
     object_mask = 1 - mask  # 反转掩码，0变为1，1变为0
     mask_image = transforms.ToPILImage()(object_mask.unsqueeze(0))
+    
+    # 提取英文部分（去除中文描述）
+    room_type = room_type.split(" - ")[0]
+    style_theme = style_theme.split(" - ")[0]
     
     # 构建完整提示词，结合房间类型和风格主题
     full_prompt = f"A {style_theme} style {room_type}, {prompt}"
@@ -350,8 +401,31 @@ def create_interface():
         gr.Markdown("## 使用ControlNet和Stable Diffusion进行房间风格调整")
         
         # 定义房间类型和风格主题选项
-        room_types = ["living room", "bedroom", "kitchen", "bathroom", "dining room", "office", "study room", "children's room"]
-        style_themes = ["modern", "minimalist", "Scandinavian", "industrial", "rustic", "traditional", "contemporary", "mid-century modern", "bohemian", "coastal", "farmhouse", "luxury"]
+        room_types = [
+            "living room - 客厅", 
+            "bedroom - 卧室", 
+            "kitchen - 厨房", 
+            "bathroom - 浴室", 
+            "dining room - 餐厅", 
+            "office - 办公室", 
+            "study room - 书房", 
+            "children's room - 儿童房"
+        ]
+        
+        style_themes = [
+            "modern - 现代", 
+            "minimalist - 极简", 
+            "Scandinavian - 北欧", 
+            "industrial - 工业风", 
+            "rustic - 乡村", 
+            "traditional - 传统", 
+            "contemporary - 当代", 
+            "mid-century modern - 中世纪现代", 
+            "bohemian - 波西米亚", 
+            "coastal - 海岸风", 
+            "farmhouse - 农舍", 
+            "luxury - 奢华"
+        ]
         
         # 模型加载按钮
         with gr.Row():
@@ -369,8 +443,8 @@ def create_interface():
                         segment_btn = gr.Button("分析图像结构")
                         
                         # 参数设置
-                        room_type = gr.Dropdown(label="房间类型", choices=room_types, value="living room")
-                        style_theme = gr.Dropdown(label="主题风格", choices=style_themes, value="modern")
+                        room_type = gr.Dropdown(label="房间类型", choices=room_types, value="living room - 客厅")
+                        style_theme = gr.Dropdown(label="主题风格", choices=style_themes, value="modern - 现代")
                         prompt = gr.Textbox(label="提示词", value="minimalist furniture, natural wood elements, clean lines")
                         negative_prompt = gr.Textbox(label="负面提示词", value="cluttered, dark, oversaturated, poor quality, blurry, unrealistic")
                         num_steps = gr.Slider(label="推理步数", minimum=10, maximum=50, step=1, value=30)
@@ -403,8 +477,8 @@ def create_interface():
                         region_choices = gr.Textbox(visible=False)  # 隐藏的文本框用于存储区域选项
                         with gr.Row(elem_id="region-dropdown"):
                             mask_label_local = gr.Dropdown(label="选择调整区域", choices=[], interactive=True)
-                        room_type_local = gr.Dropdown(label="房间类型", choices=room_types, value="living room")
-                        style_theme_local = gr.Dropdown(label="主题风格", choices=style_themes, value="modern")
+                        room_type_local = gr.Dropdown(label="房间类型", choices=room_types, value="living room - 客厅")
+                        style_theme_local = gr.Dropdown(label="主题风格", choices=style_themes, value="modern - 现代")
                         prompt_local = gr.Textbox(label="提示词", value="clean lines, light colors, contemporary furniture")
                         negative_prompt_local = gr.Textbox(label="负面提示词", value="cluttered, dark, oversaturated, poor quality, blurry, unrealistic")
                         num_steps_local = gr.Slider(label="推理步数", minimum=10, maximum=50, step=1, value=30)
