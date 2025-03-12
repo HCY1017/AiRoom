@@ -427,6 +427,30 @@ def create_interface():
             "luxury - 奢华"
         ]
         
+        # 定义提示词预设
+        prompt_presets = {
+            "简约舒适": "clean lines, comfortable seating, natural light, warm tones, simple decor",
+            "奢华典雅": "elegant furnishings, crystal chandelier, marble surfaces, plush seating, gold accents",
+            "自然原木": "wooden furniture, plants, natural materials, earth tones, organic textures",
+            "明亮通透": "large windows, white walls, light wood floors, minimal furniture, airy space",
+            "复古怀旧": "vintage furniture, retro color palette, antique accessories, classic patterns",
+            "工业风格": "exposed brick, metal fixtures, concrete floors, raw materials, minimal decor",
+            "温馨家庭": "comfortable seating, soft textiles, family photos, warm lighting, cozy atmosphere",
+            "艺术创意": "colorful accents, unique art pieces, creative lighting, bold patterns, artistic elements"
+        }
+        
+        # 定义负面提示词预设
+        negative_prompt_presets = {
+            "标准负面提示词": "cluttered, dark, oversaturated, poor quality, blurry, unrealistic",
+            "避免过度装饰": "over decorated, cluttered, busy, chaotic, messy, disorganized",
+            "避免昏暗效果": "dark, gloomy, dim, shadowy, poorly lit, murky",
+            "避免不真实效果": "unrealistic, cartoon, anime, illustration, painting, drawing, 3d render",
+            "避免低质量": "poor quality, low resolution, blurry, noisy, distorted, deformed",
+            "避免人物": "people, person, human, face, hands, fingers",
+            "避免文字": "text, letters, words, signage, labels, logos",
+            "避免奇怪构图": "cropped, cut off, weird angle, distorted perspective, bad composition"
+        }
+        
         # 模型加载按钮
         with gr.Row():
             load_models_btn = gr.Button("加载模型")
@@ -445,8 +469,15 @@ def create_interface():
                         # 参数设置
                         room_type = gr.Dropdown(label="房间类型", choices=room_types, value="living room - 客厅")
                         style_theme = gr.Dropdown(label="主题风格", choices=style_themes, value="modern - 现代")
-                        prompt = gr.Textbox(label="提示词", value="minimalist furniture, natural wood elements, clean lines")
-                        negative_prompt = gr.Textbox(label="负面提示词", value="cluttered, dark, oversaturated, poor quality, blurry, unrealistic")
+                        
+                        # 提示词预设和输入
+                        prompt_preset = gr.Dropdown(label="提示词预设", choices=list(prompt_presets.keys()), value="简约舒适")
+                        prompt = gr.Textbox(label="提示词", value=prompt_presets["简约舒适"])
+                        
+                        # 负面提示词预设和输入
+                        negative_prompt_preset = gr.Dropdown(label="负面提示词预设", choices=list(negative_prompt_presets.keys()), value="标准负面提示词")
+                        negative_prompt = gr.Textbox(label="负面提示词", value=negative_prompt_presets["标准负面提示词"])
+                        
                         num_steps = gr.Slider(label="推理步数", minimum=10, maximum=50, step=1, value=30)
                         guidance_scale = gr.Slider(label="引导比例", minimum=1.0, maximum=15.0, step=0.1, value=7.5)
                         
@@ -479,8 +510,15 @@ def create_interface():
                             mask_label_local = gr.Dropdown(label="选择调整区域", choices=[], interactive=True)
                         room_type_local = gr.Dropdown(label="房间类型", choices=room_types, value="living room - 客厅")
                         style_theme_local = gr.Dropdown(label="主题风格", choices=style_themes, value="modern - 现代")
-                        prompt_local = gr.Textbox(label="提示词", value="clean lines, light colors, contemporary furniture")
-                        negative_prompt_local = gr.Textbox(label="负面提示词", value="cluttered, dark, oversaturated, poor quality, blurry, unrealistic")
+                        
+                        # 提示词预设和输入
+                        prompt_preset_local = gr.Dropdown(label="提示词预设", choices=list(prompt_presets.keys()), value="简约舒适")
+                        prompt_local = gr.Textbox(label="提示词", value=prompt_presets["简约舒适"])
+                        
+                        # 负面提示词预设和输入
+                        negative_prompt_preset_local = gr.Dropdown(label="负面提示词预设", choices=list(negative_prompt_presets.keys()), value="标准负面提示词")
+                        negative_prompt_local = gr.Textbox(label="负面提示词", value=negative_prompt_presets["标准负面提示词"])
+                        
                         num_steps_local = gr.Slider(label="推理步数", minimum=10, maximum=50, step=1, value=30)
                         guidance_scale_local = gr.Slider(label="引导比例", minimum=1.0, maximum=15.0, step=0.1, value=7.5)
                         
@@ -508,6 +546,38 @@ def create_interface():
             segment_image, 
             inputs=[input_image], 
             outputs=[control_image, status_text, region_choices]
+        )
+        
+        # 提示词预设选择事件
+        def update_prompt(preset_name):
+            return prompt_presets.get(preset_name, "")
+            
+        def update_negative_prompt(preset_name):
+            return negative_prompt_presets.get(preset_name, "")
+            
+        prompt_preset.change(
+            update_prompt,
+            inputs=[prompt_preset],
+            outputs=[prompt]
+        )
+        
+        negative_prompt_preset.change(
+            update_negative_prompt,
+            inputs=[negative_prompt_preset],
+            outputs=[negative_prompt]
+        )
+        
+        # 局部风格调整的提示词预设选择事件
+        prompt_preset_local.change(
+            update_prompt,
+            inputs=[prompt_preset_local],
+            outputs=[prompt_local]
+        )
+        
+        negative_prompt_preset_local.change(
+            update_negative_prompt,
+            inputs=[negative_prompt_preset_local],
+            outputs=[negative_prompt_local]
         )
         
         generate_btn.click(
