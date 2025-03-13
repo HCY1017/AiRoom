@@ -22,9 +22,13 @@ MODELS_DIR = os.path.join(RESOURCE_DIR, "models")
 IMAGES_DIR = os.path.join(RESOURCE_DIR, "images")
 LABELS_DIR = os.path.join(RESOURCE_DIR, "labels")
 OUTPUT_DIR = os.path.join(RESOURCE_DIR, "output")
+GLOBAL_SAVE_DIR = os.path.join(OUTPUT_DIR, "global_style")  # 全局风格调整保存目录
+LOCAL_SAVE_DIR = os.path.join(OUTPUT_DIR, "local_style")    # 局部风格调整保存目录
 
 # 确保输出目录存在
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+os.makedirs(GLOBAL_SAVE_DIR, exist_ok=True)
+os.makedirs(LOCAL_SAVE_DIR, exist_ok=True)
 
 # 从本地JSON文件加载ADE20K数据集的标签信息
 labels_path = os.path.join(LABELS_DIR, "ade20k-id2label.json")
@@ -252,7 +256,7 @@ def adjust_global_style(prompt, negative_prompt, room_type, style_theme, num_ste
         guidance_scale=guidance_scale
     )
     
-    # 保存生成的图像
+    # 保存生成的图像到临时位置
     for i, img in enumerate(output.images):
         img.save(os.path.join(OUTPUT_DIR, f"global_style_{i+1}.png"))
     
@@ -324,7 +328,7 @@ def adjust_local_style(prompt, negative_prompt, mask_label, room_type, style_the
         guidance_scale=guidance_scale
     )
     
-    # 保存生成的图像
+    # 保存生成的图像到临时位置
     for i, img in enumerate(output.images):
         img.save(os.path.join(OUTPUT_DIR, f"local_style_{i+1}.png"))
     
@@ -374,6 +378,90 @@ def display_selected_mask(mask_label):
     except (ValueError, IndexError, AttributeError) as e:
         print(f"显示掩码时出错: {e}")
         return None, f"无法显示所选区域: {str(e)}"
+
+# 保存设计方案
+def save_global_style(image_indices, room_type, style_theme):
+    """保存全局风格调整的设计方案"""
+    if not image_indices:
+        return "请至少选择一个设计方案进行保存"
+    
+    # 提取英文部分（去除中文描述）
+    room_type_en = room_type.split(" - ")[0]
+    style_theme_en = style_theme.split(" - ")[0]
+    
+    # 生成基础文件名
+    base_filename = f"{room_type_en}_{style_theme_en}"
+    
+    saved_paths = []
+    for idx in image_indices:
+        # 查找已有的同类型文件，确定新文件的编号
+        existing_files = [f for f in os.listdir(GLOBAL_SAVE_DIR) if f.startswith(base_filename)]
+        file_num = len(existing_files) + 1
+        
+        # 创建最终文件名
+        filename = f"{base_filename}_{file_num}.png"
+        save_path = os.path.join(GLOBAL_SAVE_DIR, filename)
+        
+        # 复制临时文件到保存目录
+        temp_file = os.path.join(OUTPUT_DIR, f"global_style_{idx}.png")
+        if os.path.exists(temp_file):
+            try:
+                # 使用PIL打开并保存图像，确保格式正确
+                img = Image.open(temp_file)
+                img.save(save_path)
+                saved_paths.append(save_path)
+            except Exception as e:
+                return f"保存方案 {idx} 失败: {str(e)}"
+        else:
+            return f"找不到方案 {idx} 的图像，请先生成设计方案"
+    
+    if len(saved_paths) == 1:
+        return f"已保存设计方案到 {saved_paths[0]}"
+    else:
+        return f"已成功保存 {len(saved_paths)} 个设计方案"
+
+def save_local_style(image_indices, room_type, style_theme, mask_label):
+    """保存局部风格调整的设计方案"""
+    if not image_indices:
+        return "请至少选择一个设计方案进行保存"
+    
+    # 提取英文部分（去除中文描述）
+    room_type_en = room_type.split(" - ")[0]
+    style_theme_en = style_theme.split(" - ")[0]
+    
+    # 从mask_label中提取区域信息
+    area_info = mask_label.split(":")[0].strip() if mask_label and ":" in mask_label else "area"
+    
+    # 生成基础文件名
+    base_filename = f"{room_type_en}_{style_theme_en}_area{area_info}"
+    
+    saved_paths = []
+    for idx in image_indices:
+        # 查找已有的同类型文件，确定新文件的编号
+        existing_files = [f for f in os.listdir(LOCAL_SAVE_DIR) if f.startswith(base_filename)]
+        file_num = len(existing_files) + 1
+        
+        # 创建最终文件名
+        filename = f"{base_filename}_{file_num}.png"
+        save_path = os.path.join(LOCAL_SAVE_DIR, filename)
+        
+        # 复制临时文件到保存目录
+        temp_file = os.path.join(OUTPUT_DIR, f"local_style_{idx}.png")
+        if os.path.exists(temp_file):
+            try:
+                # 使用PIL打开并保存图像，确保格式正确
+                img = Image.open(temp_file)
+                img.save(save_path)
+                saved_paths.append(save_path)
+            except Exception as e:
+                return f"保存方案 {idx} 失败: {str(e)}"
+        else:
+            return f"找不到方案 {idx} 的图像，请先生成设计方案"
+    
+    if len(saved_paths) == 1:
+        return f"已保存设计方案到 {saved_paths[0]}"
+    else:
+        return f"已成功保存 {len(saved_paths)} 个设计方案"
 
 # 创建Gradio界面
 def create_interface():
@@ -495,6 +583,13 @@ def create_interface():
                             output_images = [gr.Image(label=f"方案 {i+1}") for i in range(2)]
                         with gr.Row():
                             output_images.extend([gr.Image(label=f"方案 {i+3}") for i in range(2)])
+                        
+                        # 保存按钮区域
+                        gr.Markdown("### 保存设计方案")
+                        with gr.Row():
+                            save_image_index = gr.CheckboxGroup(label="选择要保存的方案", choices=["方案 1", "方案 2", "方案 3", "方案 4"], value=[])
+                            save_btn = gr.Button("保存选中的设计方案")
+                        save_status = gr.Textbox(label="保存状态")
             
             # 局部风格调整选项卡
             with gr.TabItem("局部风格调整"):
@@ -537,6 +632,13 @@ def create_interface():
                             output_images_local = [gr.Image(label=f"方案 {i+1}") for i in range(2)]
                         with gr.Row():
                             output_images_local.extend([gr.Image(label=f"方案 {i+3}") for i in range(2)])
+                        
+                        # 保存按钮区域
+                        gr.Markdown("### 保存设计方案")
+                        with gr.Row():
+                            save_image_index_local = gr.CheckboxGroup(label="选择要保存的方案", choices=["方案 1", "方案 2", "方案 3", "方案 4"], value=[])
+                            save_btn_local = gr.Button("保存选中的设计方案")
+                        save_status_local = gr.Textbox(label="保存状态")
         
         # 设置事件处理
         load_models_btn.click(load_models, inputs=[], outputs=[model_status])
@@ -625,6 +727,31 @@ def create_interface():
             adjust_local_style, 
             inputs=[prompt_local, negative_prompt_local, mask_label_local, room_type_local, style_theme_local, num_steps_local, guidance_scale_local], 
             outputs=output_images_local + [status_text_local]
+        )
+        
+        # 保存设计方案事件
+        def process_save_global(image_indices, room_type, style_theme):
+            # 从选择的方案中提取索引号
+            indices = [int(idx.split(" ")[1]) for idx in image_indices]
+            return save_global_style(indices, room_type, style_theme)
+            
+        def process_save_local(image_indices, room_type, style_theme, mask_label):
+            # 从选择的方案中提取索引号
+            indices = [int(idx.split(" ")[1]) for idx in image_indices]
+            return save_local_style(indices, room_type, style_theme, mask_label)
+        
+        # 全局风格调整保存按钮事件
+        save_btn.click(
+            process_save_global,
+            inputs=[save_image_index, room_type, style_theme],
+            outputs=[save_status]
+        )
+        
+        # 局部风格调整保存按钮事件
+        save_btn_local.click(
+            process_save_local,
+            inputs=[save_image_index_local, room_type_local, style_theme_local, mask_label_local],
+            outputs=[save_status_local]
         )
     
     return app
