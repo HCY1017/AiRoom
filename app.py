@@ -6,6 +6,7 @@ import json
 import gradio as gr
 import torchvision.transforms as transforms
 from transformers import AutoImageProcessor, Mask2FormerForUniversalSegmentation
+from transformers import CLIPProcessor, CLIPModel
 from controlnet_aux import MLSDdetector
 from diffusers import (
     ControlNetModel, 
@@ -15,6 +16,10 @@ from diffusers import (
 )
 from diffusers.utils import load_image
 import cv2
+import pickle
+import faiss
+import datetime
+import glob
 
 # 设置资源路径
 RESOURCE_DIR = "resources"
@@ -24,11 +29,15 @@ LABELS_DIR = os.path.join(RESOURCE_DIR, "labels")
 OUTPUT_DIR = os.path.join(RESOURCE_DIR, "output")
 GLOBAL_SAVE_DIR = os.path.join(OUTPUT_DIR, "global_style")  # 全局风格调整保存目录
 LOCAL_SAVE_DIR = os.path.join(OUTPUT_DIR, "local_style")    # 局部风格调整保存目录
+FEATURES_DIR = os.path.join(RESOURCE_DIR, "features")       # 图像特征存储目录
+INDEX_PATH = os.path.join(FEATURES_DIR, "image_features.index")  # FAISS索引文件
+METADATA_PATH = os.path.join(FEATURES_DIR, "image_metadata.pkl") # 图像元数据文件
 
 # 确保输出目录存在
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(GLOBAL_SAVE_DIR, exist_ok=True)
 os.makedirs(LOCAL_SAVE_DIR, exist_ok=True)
+os.makedirs(FEATURES_DIR, exist_ok=True)
 
 # 从本地JSON文件加载ADE20K数据集的标签信息
 labels_path = os.path.join(LABELS_DIR, "ade20k-id2label.json")
@@ -54,10 +63,14 @@ controlnet = None
 global_pipe = None
 inpaint_pipe = None
 segmentation_result = None
+clip_processor = None
+clip_model = None
+faiss_index = None
+image_metadata = {}
 
 def load_models():
     """加载所有需要的模型"""
-    global processor, mask2former_model, mlsd_processor, controlnet, global_pipe, inpaint_pipe
+    global processor, mask2former_model, mlsd_processor, controlnet, global_pipe, inpaint_pipe, clip_processor, clip_model, faiss_index, image_metadata
     
     # 加载 Mask2Former 模型
     print("加载 Mask2Former 模型...")
@@ -110,6 +123,20 @@ def load_models():
     inpaint_pipe.scheduler = UniPCMultistepScheduler.from_config(inpaint_pipe.scheduler.config)
     inpaint_pipe.enable_model_cpu_offload()
     
+    # 加载 CLIP 模型用于图像特征提取
+    print("加载 CLIP 模型...")
+    clip_processor = CLIPProcessor.from_pretrained(
+        "openai/clip-vit-base-patch32",
+        cache_dir=MODELS_DIR
+    )
+    clip_model = CLIPModel.from_pretrained(
+        "openai/clip-vit-base-patch32",
+        cache_dir=MODELS_DIR
+    )
+    
+    # 加载或创建FAISS索引
+    load_or_create_index()
+    
     # 尝试启用xformers，如果安装了的话
     try:
         global_pipe.enable_xformers_memory_efficient_attention()
@@ -119,6 +146,260 @@ def load_models():
         print("xformers 未安装，将使用默认注意力机制")
     
     return "所有模型加载完成！"
+
+def extract_image_features(image):
+    """
+    使用CLIP模型提取图像特征
+    
+    Args:
+        image: PIL图像对象
+    
+    Returns:
+        numpy数组，图像特征向量
+    """
+    global clip_processor, clip_model
+    
+    if clip_processor is None or clip_model is None:
+        return None, "请先加载模型！"
+    
+    # 确保图像是PIL格式
+    if not isinstance(image, Image.Image):
+        image = Image.fromarray(image)
+    
+    # 使用CLIP处理图像
+    with torch.no_grad():
+        inputs = clip_processor(images=image, return_tensors="pt")
+        image_features = clip_model.get_image_features(**inputs)
+        
+    # 归一化特征向量
+    image_features = image_features / image_features.norm(dim=1, keepdim=True)
+    
+    # 转换为numpy数组
+    features = image_features.cpu().numpy().astype('float32')
+    
+    return features, "特征提取成功"
+
+def load_or_create_index():
+    """
+    加载现有的FAISS索引或创建新索引
+    """
+    global faiss_index, image_metadata
+    
+    # 检查索引文件是否存在
+    if os.path.exists(INDEX_PATH) and os.path.exists(METADATA_PATH):
+        print("加载现有的图像特征索引...")
+        try:
+            faiss_index = faiss.read_index(INDEX_PATH)
+            with open(METADATA_PATH, 'rb') as f:
+                image_metadata = pickle.load(f)
+            print(f"成功加载索引，包含 {faiss_index.ntotal} 张图像")
+        except Exception as e:
+            print(f"加载索引失败: {e}")
+            create_new_index()
+    else:
+        print("创建新的图像特征索引...")
+        create_new_index()
+
+def create_new_index():
+    """
+    创建新的FAISS索引并扫描现有图像
+    """
+    global faiss_index, image_metadata
+    
+    # 创建新的索引和元数据字典
+    feature_dim = 512  # CLIP-ViT-B/32的特征维度
+    faiss_index = faiss.IndexFlatIP(feature_dim)  # 使用内积相似度（余弦相似度）
+    image_metadata = {}
+    
+    # 扫描并索引现有的图像
+    index_existing_images()
+
+def index_existing_images():
+    """
+    扫描并索引现有的设计方案图像
+    """
+    global faiss_index, image_metadata, clip_processor, clip_model
+    
+    if clip_processor is None or clip_model is None:
+        print("CLIP模型未加载，无法索引图像")
+        return
+    
+    # 获取所有保存的图像
+    global_images = glob.glob(os.path.join(GLOBAL_SAVE_DIR, "*.png"))
+    local_images = glob.glob(os.path.join(LOCAL_SAVE_DIR, "*.png"))
+    all_images = global_images + local_images
+    
+    print(f"发现 {len(all_images)} 张现有图像")
+    
+    # 提取并索引每张图像的特征
+    new_features = []
+    new_metadata = []
+    
+    for img_path in all_images:
+        # 检查是否已经索引过
+        if img_path in image_metadata:
+            continue
+            
+        try:
+            # 加载图像
+            img = Image.open(img_path)
+            
+            # 提取特征
+            features, _ = extract_image_features(img)
+            if features is not None:
+                # 准备元数据
+                metadata = {
+                    "path": img_path,
+                    "filename": os.path.basename(img_path),
+                    "type": "global" if img_path in global_images else "local",
+                    "timestamp": datetime.datetime.fromtimestamp(os.path.getmtime(img_path)).strftime('%Y-%m-%d %H:%M:%S')
+                }
+                
+                # 解析文件名以提取额外信息
+                filename = os.path.basename(img_path)
+                parts = filename.split('_')
+                if len(parts) >= 3:
+                    metadata["room_type"] = parts[0]
+                    metadata["style_theme"] = parts[1]
+                
+                # 添加到待索引列表
+                new_features.append(features[0])
+                new_metadata.append(metadata)
+                
+                # 更新元数据字典
+                image_metadata[img_path] = metadata
+        except Exception as e:
+            print(f"处理图像 {img_path} 时出错: {e}")
+    
+    # 将新特征添加到索引
+    if new_features:
+        new_features = np.array(new_features).astype('float32')
+        faiss_index.add(new_features)
+        print(f"成功索引 {len(new_features)} 张新图像")
+    
+    # 保存索引和元数据
+    save_index()
+
+def save_index():
+    """
+    保存FAISS索引和元数据到文件
+    """
+    global faiss_index, image_metadata
+    
+    if faiss_index is not None and image_metadata:
+        try:
+            faiss.write_index(faiss_index, INDEX_PATH)
+            with open(METADATA_PATH, 'wb') as f:
+                pickle.dump(image_metadata, f)
+            print(f"索引已保存，包含 {faiss_index.ntotal} 张图像")
+        except Exception as e:
+            print(f"保存索引失败: {e}")
+
+def add_image_to_index(image_path, image=None):
+    """
+    将新图像添加到索引
+    
+    Args:
+        image_path: 图像文件路径
+        image: 可选，PIL图像对象
+    """
+    global faiss_index, image_metadata, clip_processor, clip_model
+    
+    if clip_processor is None or clip_model is None:
+        print("CLIP模型未加载，无法添加图像到索引")
+        return
+    
+    # 检查图像是否已经在索引中
+    if image_path in image_metadata:
+        print(f"图像 {image_path} 已在索引中")
+        return
+    
+    try:
+        # 加载图像（如果未提供）
+        if image is None:
+            image = Image.open(image_path)
+        
+        # 提取特征
+        features, _ = extract_image_features(image)
+        if features is not None:
+            # 准备元数据
+            is_global = "global_style" in image_path
+            metadata = {
+                "path": image_path,
+                "filename": os.path.basename(image_path),
+                "type": "global" if is_global else "local",
+                "timestamp": datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            }
+            
+            # 解析文件名以提取额外信息
+            filename = os.path.basename(image_path)
+            parts = filename.split('_')
+            if len(parts) >= 3:
+                metadata["room_type"] = parts[0]
+                metadata["style_theme"] = parts[1]
+            
+            # 添加到索引
+            faiss_index.add(features)
+            
+            # 更新元数据字典
+            image_metadata[image_path] = metadata
+            
+            # 保存索引和元数据
+            save_index()
+            
+            print(f"图像 {image_path} 已添加到索引")
+    except Exception as e:
+        print(f"添加图像 {image_path} 到索引时出错: {e}")
+
+def search_similar_images(query_image, top_k=8):
+    """
+    搜索与查询图像相似的图像
+    
+    Args:
+        query_image: PIL图像对象或numpy数组
+        top_k: 返回的最相似图像数量
+    
+    Returns:
+        相似图像的路径列表和相似度分数
+    """
+    global faiss_index, image_metadata, clip_processor, clip_model
+    
+    if faiss_index is None or clip_processor is None or clip_model is None:
+        return [], [], "请先加载模型！"
+    
+    if faiss_index.ntotal == 0:
+        return [], [], "索引为空，请先生成并保存一些设计方案"
+    
+    # 提取查询图像的特征
+    query_features, status = extract_image_features(query_image)
+    if query_features is None:
+        return [], [], status
+    
+    # 执行相似度搜索
+    scores, indices = faiss_index.search(query_features, min(top_k, faiss_index.ntotal))
+    
+    # 获取结果图像的路径和元数据
+    result_paths = []
+    result_metadata = []
+    
+    for i, idx in enumerate(indices[0]):
+        # 获取图像路径
+        paths = [path for path, meta in image_metadata.items() if meta.get("index", -1) == idx]
+        
+        # 如果找不到对应的索引，则使用遍历方式查找
+        if not paths:
+            # 获取所有图像路径的列表
+            all_paths = list(image_metadata.keys())
+            if idx < len(all_paths):
+                paths = [all_paths[idx]]
+        
+        if paths:
+            result_paths.append(paths[0])
+            meta = image_metadata.get(paths[0], {})
+            meta["similarity"] = float(scores[0][i])  # 添加相似度分数
+            result_metadata.append(meta)
+    
+    return result_paths, result_metadata, "搜索完成"
 
 def get_mask_from_segmentation_map(seg_map):
     """从分割图生成掩码，每个类别对应一个掩码"""
@@ -260,6 +541,9 @@ def adjust_global_style(prompt, negative_prompt, room_type, style_theme, num_ste
     for i, img in enumerate(output.images):
         img.save(os.path.join(OUTPUT_DIR, f"global_style_{i+1}.png"))
     
+    # 保存生成的图像到管道对象，以便后续保存
+    global_pipe._last_images = output.images
+    
     # 返回单独的图像和状态文本，而不是列表+文本
     return output.images[0], output.images[1], output.images[2], output.images[3], "全局风格调整完成！"
 
@@ -332,6 +616,9 @@ def adjust_local_style(prompt, negative_prompt, mask_label, room_type, style_the
     for i, img in enumerate(output.images):
         img.save(os.path.join(OUTPUT_DIR, f"local_style_{i+1}.png"))
     
+    # 保存生成的图像到管道对象，以便后续保存
+    inpaint_pipe._last_images = output.images
+    
     # 返回单独的图像和状态文本，而不是列表+文本
     return output.images[0], output.images[1], output.images[2], output.images[3], "局部风格调整完成！"
 
@@ -382,86 +669,129 @@ def display_selected_mask(mask_label):
 # 保存设计方案
 def save_global_style(image_indices, room_type, style_theme):
     """保存全局风格调整的设计方案"""
-    if not image_indices:
-        return "请至少选择一个设计方案进行保存"
+    global global_pipe
     
-    # 提取英文部分（去除中文描述）
+    if global_pipe is None:
+        return "请先加载模型！"
+    
+    if not hasattr(global_pipe, "_last_images") or not global_pipe._last_images:
+        return "没有可保存的图像！"
+    
+    # 提取房间类型和风格主题的英文部分
     room_type_en = room_type.split(" - ")[0]
     style_theme_en = style_theme.split(" - ")[0]
     
-    # 生成基础文件名
-    base_filename = f"{room_type_en}_{style_theme_en}"
+    # 获取当前保存目录中的文件数量，用于自增编号
+    existing_files = [f for f in os.listdir(GLOBAL_SAVE_DIR) if f.startswith(f"{room_type_en}_{style_theme_en}_")]
+    start_index = len(existing_files) + 1
     
     saved_paths = []
-    for idx in image_indices:
-        # 查找已有的同类型文件，确定新文件的编号
-        existing_files = [f for f in os.listdir(GLOBAL_SAVE_DIR) if f.startswith(base_filename)]
-        file_num = len(existing_files) + 1
-        
-        # 创建最终文件名
-        filename = f"{base_filename}_{file_num}.png"
-        save_path = os.path.join(GLOBAL_SAVE_DIR, filename)
-        
-        # 复制临时文件到保存目录
-        temp_file = os.path.join(OUTPUT_DIR, f"global_style_{idx}.png")
-        if os.path.exists(temp_file):
-            try:
-                # 使用PIL打开并保存图像，确保格式正确
-                img = Image.open(temp_file)
-                img.save(save_path)
-                saved_paths.append(save_path)
-            except Exception as e:
-                return f"保存方案 {idx} 失败: {str(e)}"
-        else:
-            return f"找不到方案 {idx} 的图像，请先生成设计方案"
+    for i, idx in enumerate(image_indices):
+        if 0 <= idx - 1 < len(global_pipe._last_images):
+            image = global_pipe._last_images[idx - 1]
+            
+            # 构建简洁的文件名: room_style_number.png
+            filename = f"{room_type_en}_{style_theme_en}_{start_index + i}.png"
+            save_path = os.path.join(GLOBAL_SAVE_DIR, filename)
+            
+            # 保存图像
+            image.save(save_path)
+            saved_paths.append(save_path)
+            
+            # 将图像添加到索引
+            add_image_to_index(save_path, image)
     
-    if len(saved_paths) == 1:
-        return f"已保存设计方案到 {saved_paths[0]}"
+    if saved_paths:
+        return f"已保存 {len(saved_paths)} 张设计方案到 {GLOBAL_SAVE_DIR}"
     else:
-        return f"已成功保存 {len(saved_paths)} 个设计方案"
+        return "没有保存任何图像"
 
 def save_local_style(image_indices, room_type, style_theme, mask_label):
     """保存局部风格调整的设计方案"""
-    if not image_indices:
-        return "请至少选择一个设计方案进行保存"
+    global inpaint_pipe
     
-    # 提取英文部分（去除中文描述）
+    if inpaint_pipe is None:
+        return "请先加载模型！"
+    
+    if not hasattr(inpaint_pipe, "_last_images") or not inpaint_pipe._last_images:
+        return "没有可保存的图像！"
+    
+    # 提取房间类型和风格主题的英文部分
     room_type_en = room_type.split(" - ")[0]
     style_theme_en = style_theme.split(" - ")[0]
     
-    # 从mask_label中提取区域信息
-    area_info = mask_label.split(":")[0].strip() if mask_label and ":" in mask_label else "area"
+    # 提取区域标签
+    region_label = "unknown"
+    if mask_label:
+        try:
+            region_label = mask_label.split(":")[1].split("-")[0].strip()
+        except:
+            pass
     
-    # 生成基础文件名
-    base_filename = f"{room_type_en}_{style_theme_en}_area{area_info}"
+    # 获取当前保存目录中的文件数量，用于自增编号
+    existing_files = [f for f in os.listdir(LOCAL_SAVE_DIR) if f.startswith(f"{room_type_en}_{style_theme_en}_{region_label}_")]
+    start_index = len(existing_files) + 1
     
     saved_paths = []
-    for idx in image_indices:
-        # 查找已有的同类型文件，确定新文件的编号
-        existing_files = [f for f in os.listdir(LOCAL_SAVE_DIR) if f.startswith(base_filename)]
-        file_num = len(existing_files) + 1
-        
-        # 创建最终文件名
-        filename = f"{base_filename}_{file_num}.png"
-        save_path = os.path.join(LOCAL_SAVE_DIR, filename)
-        
-        # 复制临时文件到保存目录
-        temp_file = os.path.join(OUTPUT_DIR, f"local_style_{idx}.png")
-        if os.path.exists(temp_file):
-            try:
-                # 使用PIL打开并保存图像，确保格式正确
-                img = Image.open(temp_file)
-                img.save(save_path)
-                saved_paths.append(save_path)
-            except Exception as e:
-                return f"保存方案 {idx} 失败: {str(e)}"
-        else:
-            return f"找不到方案 {idx} 的图像，请先生成设计方案"
+    for i, idx in enumerate(image_indices):
+        if 0 <= idx - 1 < len(inpaint_pipe._last_images):
+            image = inpaint_pipe._last_images[idx - 1]
+            
+            # 构建简洁的文件名: room_style_region_number.png
+            filename = f"{room_type_en}_{style_theme_en}_{region_label}_{start_index + i}.png"
+            save_path = os.path.join(LOCAL_SAVE_DIR, filename)
+            
+            # 保存图像
+            image.save(save_path)
+            saved_paths.append(save_path)
+            
+            # 将图像添加到索引
+            add_image_to_index(save_path, image)
     
-    if len(saved_paths) == 1:
-        return f"已保存设计方案到 {saved_paths[0]}"
+    if saved_paths:
+        return f"已保存 {len(saved_paths)} 张设计方案到 {LOCAL_SAVE_DIR}"
     else:
-        return f"已成功保存 {len(saved_paths)} 个设计方案"
+        return "没有保存任何图像"
+
+def perform_image_search(query_image, top_k=8):
+    """
+    执行图像相似度搜索并返回结果
+    
+    Args:
+        query_image: 查询图像
+        top_k: 返回的结果数量
+    
+    Returns:
+        相似图像列表、相似度分数列表和状态信息
+    """
+    # 执行相似度搜索
+    result_paths, result_metadata, status = search_similar_images(query_image, top_k)
+    
+    if not result_paths:
+        return [], [], status
+    
+    # 加载结果图像和相似度分数
+    result_images = []
+    similarity_scores = []
+    
+    for i, path in enumerate(result_paths):
+        try:
+            img = Image.open(path)
+            result_images.append(img)
+            
+            # 获取相似度分数（转换为百分比）
+            similarity = result_metadata[i].get("similarity", 0)
+            similarity_percentage = f"相似度: {similarity * 100:.1f}%"
+            similarity_scores.append(similarity_percentage)
+        except Exception as e:
+            print(f"加载图像 {path} 时出错: {e}")
+    
+    # 确保只返回请求的数量
+    if len(result_images) > top_k:
+        result_images = result_images[:top_k]
+        similarity_scores = similarity_scores[:top_k]
+    
+    return result_images, similarity_scores, status
 
 # 创建Gradio界面
 def create_interface():
@@ -483,6 +813,16 @@ def create_interface():
         }
         #region-dropdown .wrap::-webkit-scrollbar-thumb:hover {
             background: #555;
+        }
+        .similar-image {
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 5px;
+            transition: transform 0.2s;
+        }
+        .similar-image:hover {
+            transform: scale(1.05);
+            box-shadow: 0 0 10px rgba(0,0,0,0.2);
         }
     """) as app:
         gr.Markdown("# AI房间设计助手")
@@ -639,6 +979,67 @@ def create_interface():
                             save_image_index_local = gr.CheckboxGroup(label="选择要保存的方案", choices=["方案 1", "方案 2", "方案 3", "方案 4"], value=[])
                             save_btn_local = gr.Button("保存选中的设计方案")
                         save_status_local = gr.Textbox(label="保存状态")
+            
+            # 图像相似性搜索选项卡
+            with gr.TabItem("相似图像搜索"):
+                with gr.Row():
+                    with gr.Column(scale=1):
+                        # 输入区域
+                        gr.Markdown("### 上传参考图像")
+                        reference_image = gr.Image(label="参考图像", type="pil")
+                        
+                        # 搜索参数
+                        num_results = gr.Slider(label="搜索结果数量", minimum=2, maximum=8, step=2, value=4)
+                        
+                        # 搜索按钮
+                        search_btn = gr.Button("搜索相似图像")
+                        search_status = gr.Textbox(label="搜索状态")
+                        
+                        # 索引管理
+                        gr.Markdown("### 索引管理")
+                        rebuild_index_btn = gr.Button("重建图像索引")
+                        index_status = gr.Textbox(label="索引状态")
+                    
+                    with gr.Column(scale=1):
+                        # 结果展示区域
+                        gr.Markdown("### 相似图像结果")
+                        
+                        # 创建一个容器来动态显示结果
+                        result_container = gr.Column()
+                        
+                        # 在容器中创建所有可能的结果行（最多8个结果，2x4布局）
+                        with result_container:
+                            # 第一行（结果1-2）
+                            with gr.Row(visible=True) as row1:
+                                similar_images_row1 = [gr.Image(label=f"结果 {i+1}", elem_classes="similar-image") for i in range(2)]
+                            with gr.Row(visible=True) as score_row1:
+                                similarity_scores_row1 = [gr.Textbox(label="相似度", elem_classes="similarity-score") for _ in range(2)]
+                            
+                            # 第二行（结果3-4）
+                            with gr.Row(visible=True) as row2:
+                                similar_images_row2 = [gr.Image(label=f"结果 {i+3}", elem_classes="similar-image") for i in range(2)]
+                            with gr.Row(visible=True) as score_row2:
+                                similarity_scores_row2 = [gr.Textbox(label="相似度", elem_classes="similarity-score") for _ in range(2)]
+                            
+                            # 第三行（结果5-6）
+                            with gr.Row(visible=True) as row3:
+                                similar_images_row3 = [gr.Image(label=f"结果 {i+5}", elem_classes="similar-image") for i in range(2)]
+                            with gr.Row(visible=True) as score_row3:
+                                similarity_scores_row3 = [gr.Textbox(label="相似度", elem_classes="similarity-score") for _ in range(2)]
+                            
+                            # 第四行（结果7-8）
+                            with gr.Row(visible=True) as row4:
+                                similar_images_row4 = [gr.Image(label=f"结果 {i+7}", elem_classes="similar-image") for i in range(2)]
+                            with gr.Row(visible=True) as score_row4:
+                                similarity_scores_row4 = [gr.Textbox(label="相似度", elem_classes="similarity-score") for _ in range(2)]
+                        
+                        # 合并所有结果图像组件和相似度分数组件
+                        similar_images = similar_images_row1 + similar_images_row2 + similar_images_row3 + similar_images_row4
+                        similarity_scores = similarity_scores_row1 + similarity_scores_row2 + similarity_scores_row3 + similarity_scores_row4
+                        
+                        # 保存所有行的引用，用于控制可见性
+                        image_rows = [row1, row2, row3, row4]
+                        score_rows = [score_row1, score_row2, score_row3, score_row4]
         
         # 设置事件处理
         load_models_btn.click(load_models, inputs=[], outputs=[model_status])
@@ -752,6 +1153,75 @@ def create_interface():
             process_save_local,
             inputs=[save_image_index_local, room_type_local, style_theme_local, mask_label_local],
             outputs=[save_status_local]
+        )
+        
+        # 图像相似性搜索事件
+        def handle_image_search(query_image, num_results):
+            """处理图像相似性搜索请求"""
+            if query_image is None:
+                # 返回空结果列表，每个图像组件对应一个None
+                empty_results = [None] * 8  # 固定返回8个None，对应8个图像组件
+                empty_scores = [""] * 8     # 固定返回8个空字符串，对应8个相似度标签
+                
+                # 隐藏所有额外结果行
+                for row in image_rows[1:]:
+                    row.update(visible=False)
+                for row in score_rows[1:]:
+                    row.update(visible=False)
+                
+                return empty_results + empty_scores + ["请先上传参考图像"]
+            
+            # 执行相似度搜索，只获取用户请求的数量
+            result_images, similarity_scores, status = perform_image_search(query_image, int(num_results))
+            
+            # 打印调试信息
+            print(f"请求的结果数量: {num_results}")
+            print(f"实际返回的结果数量: {len(result_images)}")
+            
+            # 清空所有结果
+            padded_results = [None] * 8
+            padded_scores = [""] * 8
+            
+            # 填充实际结果
+            for i in range(min(len(result_images), 8)):
+                padded_results[i] = result_images[i]
+                padded_scores[i] = similarity_scores[i]
+            
+            # 控制结果行的可见性
+            for i, row in enumerate(image_rows):
+                row.update(visible=i < len(result_images))
+            for i, row in enumerate(score_rows):
+                row.update(visible=i < len(result_images))
+            
+            # 返回图像列表、相似度分数列表和状态文本
+            return padded_results + padded_scores + [f"找到 {len(result_images)} 个相似图像"]
+        
+        # 绑定搜索按钮事件
+        search_btn.click(
+            handle_image_search,
+            inputs=[reference_image, num_results],
+            outputs=similar_images + similarity_scores + [search_status]
+        )
+        
+        # 重建索引事件
+        def rebuild_image_index():
+            """重建图像特征索引"""
+            global faiss_index, image_metadata
+            
+            # 创建新的索引
+            create_new_index()
+            
+            # 返回索引状态
+            if faiss_index is not None:
+                return f"索引重建完成，共索引了 {faiss_index.ntotal} 张图像"
+            else:
+                return "索引重建失败"
+        
+        # 绑定重建索引按钮事件
+        rebuild_index_btn.click(
+            rebuild_image_index,
+            inputs=[],
+            outputs=[index_status]
         )
     
     return app
