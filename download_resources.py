@@ -2,7 +2,7 @@ import os
 import json
 import requests
 import torch
-from transformers import AutoImageProcessor, Mask2FormerForUniversalSegmentation
+from transformers import AutoImageProcessor, Mask2FormerForUniversalSegmentation, CLIPProcessor, CLIPModel
 from controlnet_aux import MLSDdetector
 from diffusers import ControlNetModel, StableDiffusionControlNetPipeline, StableDiffusionControlNetInpaintPipeline
 import urllib.request
@@ -88,6 +88,21 @@ def download_models():
         use_safetensors=False
     )
     print("Stable Diffusion Inpainting 模型下载完成")
+    
+    # 6. 下载图像特征提取模型 (用于相似性搜索)
+    print("下载图像特征提取模型...")
+    try:
+        clip_model = CLIPModel.from_pretrained(
+            "openai/clip-vit-base-patch32", 
+            cache_dir="resources/models"
+        )
+        clip_processor = CLIPProcessor.from_pretrained(
+            "openai/clip-vit-base-patch32", 
+            cache_dir="resources/models"
+        )
+        print("图像特征提取模型下载完成")
+    except Exception as e:
+        print(f"图像特征提取模型下载失败: {e}")
 
 if __name__ == "__main__":
     create_directories()
