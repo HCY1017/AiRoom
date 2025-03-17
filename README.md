@@ -2,12 +2,13 @@
 
 ## 项目简介
 
-AiRoom是一个基于AI技术的室内设计辅助工具，通过结合ControlNet和Stable Diffusion模型，实现对室内场景的全局风格调整和局部区域风格定制。该工具提供了直观的交互式界面，使用户能够轻松地对室内设计进行创意探索和风格转换。
+AiRoom是一个基于AI技术的室内设计辅助工具，通过结合ControlNet和Stable Diffusion模型，实现对室内场景的全局风格调整和局部区域风格定制。该工具提供了直观的交互式界面，使用户能够轻松地对室内设计进行创意探索和风格转换，并支持相似图像搜索功能，帮助用户发现灵感。
 
 ## 功能特点
 
 - **全局风格调整**：使用ControlNet保持原始空间布局的同时，通过Stable Diffusion调整整体风格
 - **局部风格调整**：针对特定区域（如墙壁、地板、家具等）进行风格定制，保持其他区域不变
+- **相似图像搜索**：基于CLIP和FAISS实现的高效图像相似性搜索，帮助用户发现相似设计方案
 - **交互式界面**：基于Gradio构建的用户友好界面，支持实时预览和参数调整
 - **多方案生成**：每次生成多个设计方案供用户选择，以2x2网格形式展示
 - **区域智能识别**：自动分析图像中的不同功能区域，无需手动标注
@@ -71,10 +72,10 @@ python app.py
 
 3. 使用流程：
    - 首先加载模型
-   - 选择功能模式（全局风格调整或局部风格调整）
+   - 选择功能模式（全局风格调整、局部风格调整或相似图像搜索）
    - 上传室内场景图片或使用示例图片
    - 根据需要调整参数
-   - 生成并查看设计方案
+   - 生成并查看设计方案或搜索结果
 
 ## 功能详解
 
@@ -96,14 +97,29 @@ python app.py
 - 输入针对该区域的风格描述提示词
 - 生成保持整体结构的局部风格变化
 
+### 相似图像搜索
+
+相似图像搜索功能利用CLIP模型和FAISS索引，帮助用户查找与参考图像风格相似的设计方案。用户可以：
+
+- 上传参考图像
+- 设置搜索结果数量
+- 在滚动窗口中浏览相似图像结果
+- 查看每个结果的相似度百分比
+- 重建图像索引以包含新生成的设计方案
+
 ## 项目结构
 
 - `app.py`：主应用程序，包含Gradio界面和核心功能
-- `gloab.py`：全局风格调整功能的独立实现
+- `global.py`：全局风格调整功能的独立实现
 - `inpaint.py`：局部风格调整功能的独立实现
 - `download_resources.py`：下载必要模型和资源的工具脚本
 - `requirements.txt`：项目依赖列表
 - `resources/`：存放模型、图像和标签数据的目录
+  - `models/`：存储AI模型
+  - `images/`：存储示例和生成的图像
+  - `labels/`：存储标签数据
+  - `output/`：存储生成的设计方案
+  - `features/`：存储图像特征和索引文件
 
 ## 技术实现
 
@@ -112,6 +128,8 @@ python app.py
 - **Mask2Former**：用于场景语义分割，识别不同功能区域
 - **ControlNet (MLSD)**：保持原始场景的结构和布局
 - **Stable Diffusion**：生成符合提示词描述的图像内容
+- **CLIP**：提取图像特征，用于相似性搜索
+- **FAISS**：高效的向量相似性搜索库
 - **Gradio**：构建直观的用户界面
 
 ## 注意事项
@@ -119,6 +137,7 @@ python app.py
 - 首次运行时需要下载较大的模型文件（约10GB），请确保有足够的磁盘空间和稳定的网络连接
 - 生成过程可能需要较长时间，取决于您的硬件配置
 - 为获得最佳效果，建议使用清晰的室内场景照片作为输入
+- 相似图像搜索功能需要先生成并保存一些设计方案才能有效工作
 
 ## 许可证
 
@@ -131,6 +150,8 @@ python app.py
 - [Hugging Face Diffusers](https://github.com/huggingface/diffusers)
 - [ControlNet](https://github.com/lllyasviel/ControlNet)
 - [Mask2Former](https://github.com/facebookresearch/Mask2Former)
+- [CLIP](https://github.com/openai/CLIP)
+- [FAISS](https://github.com/facebookresearch/faiss)
 - [Gradio](https://github.com/gradio-app/gradio)
 
 ## 联系方式
