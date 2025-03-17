@@ -824,6 +824,32 @@ def create_interface():
             transform: scale(1.05);
             box-shadow: 0 0 10px rgba(0,0,0,0.2);
         }
+        /* 相似图像结果滚动窗口样式 */
+        .similar-results-container {
+            max-height: 600px;
+            overflow-y: auto;
+            padding: 10px;
+            border: 1px solid #eee;
+            border-radius: 8px;
+            background-color: #f9f9f9;
+        }
+        .similar-results-container::-webkit-scrollbar {
+            width: 10px;
+        }
+        .similar-results-container::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 8px;
+        }
+        .similar-results-container::-webkit-scrollbar-thumb {
+            background: #888;
+            border-radius: 8px;
+        }
+        .similar-results-container::-webkit-scrollbar-thumb:hover {
+            background: #555;
+        }
+        .result-item {
+            margin-bottom: 15px;
+        }
     """) as app:
         gr.Markdown("# AI房间设计助手")
         gr.Markdown("## 使用ControlNet和Stable Diffusion进行房间风格调整")
@@ -1004,33 +1030,31 @@ def create_interface():
                         # 结果展示区域
                         gr.Markdown("### 相似图像结果")
                         
-                        # 创建一个容器来动态显示结果
-                        result_container = gr.Column()
-                        
-                        # 在容器中创建所有可能的结果行（最多8个结果，2x4布局）
-                        with result_container:
+                        # 创建一个带滚动条的容器来动态显示结果
+                        with gr.Column(elem_classes="similar-results-container") as result_container:
+                            # 创建所有可能的结果行（最多8个结果，2x2布局）
                             # 第一行（结果1-2）
-                            with gr.Row(visible=True) as row1:
+                            with gr.Row(visible=True, elem_classes="result-item") as row1:
                                 similar_images_row1 = [gr.Image(label=f"结果 {i+1}", elem_classes="similar-image") for i in range(2)]
-                            with gr.Row(visible=True) as score_row1:
+                            with gr.Row(visible=True, elem_classes="result-item") as score_row1:
                                 similarity_scores_row1 = [gr.Textbox(label="相似度", elem_classes="similarity-score") for _ in range(2)]
                             
                             # 第二行（结果3-4）
-                            with gr.Row(visible=True) as row2:
+                            with gr.Row(visible=True, elem_classes="result-item") as row2:
                                 similar_images_row2 = [gr.Image(label=f"结果 {i+3}", elem_classes="similar-image") for i in range(2)]
-                            with gr.Row(visible=True) as score_row2:
+                            with gr.Row(visible=True, elem_classes="result-item") as score_row2:
                                 similarity_scores_row2 = [gr.Textbox(label="相似度", elem_classes="similarity-score") for _ in range(2)]
                             
                             # 第三行（结果5-6）
-                            with gr.Row(visible=True) as row3:
+                            with gr.Row(visible=True, elem_classes="result-item") as row3:
                                 similar_images_row3 = [gr.Image(label=f"结果 {i+5}", elem_classes="similar-image") for i in range(2)]
-                            with gr.Row(visible=True) as score_row3:
+                            with gr.Row(visible=True, elem_classes="result-item") as score_row3:
                                 similarity_scores_row3 = [gr.Textbox(label="相似度", elem_classes="similarity-score") for _ in range(2)]
                             
                             # 第四行（结果7-8）
-                            with gr.Row(visible=True) as row4:
+                            with gr.Row(visible=True, elem_classes="result-item") as row4:
                                 similar_images_row4 = [gr.Image(label=f"结果 {i+7}", elem_classes="similar-image") for i in range(2)]
-                            with gr.Row(visible=True) as score_row4:
+                            with gr.Row(visible=True, elem_classes="result-item") as score_row4:
                                 similarity_scores_row4 = [gr.Textbox(label="相似度", elem_classes="similarity-score") for _ in range(2)]
                         
                         # 合并所有结果图像组件和相似度分数组件
