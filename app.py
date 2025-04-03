@@ -137,13 +137,8 @@ def load_models():
     # 加载或创建FAISS索引
     load_or_create_index()
     
-    # 尝试启用xformers，如果安装了的话
-    try:
-        global_pipe.enable_xformers_memory_efficient_attention()
-        inpaint_pipe.enable_xformers_memory_efficient_attention()
-        print("成功启用 xformers 内存优化")
-    except (ModuleNotFoundError, ImportError):
-        print("xformers 未安装，将使用默认注意力机制")
+    # 默认使用标准注意力机制
+    print("使用默认注意力机制")
     
     return "所有模型加载完成！"
 
