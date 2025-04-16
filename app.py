@@ -1248,4 +1248,4 @@ def create_interface():
 # 启动应用
 if __name__ == "__main__":
     app = create_interface()
-    app.launch()
+    app.launch(share=True)
