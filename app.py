@@ -789,8 +789,14 @@ def perform_image_search(query_image, top_k=8):
     return result_images, similarity_scores, status
 
 # 创建Gradio界面
-def create_interface():
-    with gr.Blocks(title="AI房间设计助手", css="""
+def create_interface():    
+    with gr.Blocks(title="智能室内系统", css="""
+        .center-text {
+            text-align: center;
+            margin-left: auto;
+            margin-right: auto;
+            max-width: 90%;
+        }
         #region-dropdown .wrap {
             max-height: 300px;
             overflow-y: auto;
@@ -844,10 +850,9 @@ def create_interface():
         }
         .result-item {
             margin-bottom: 15px;
-        }
-    """) as app:
-        gr.Markdown("# AI房间设计助手")
-        gr.Markdown("## 使用ControlNet和Stable Diffusion进行房间风格调整")
+        }    """) as app:
+        gr.Markdown("# 智能室内设计系统", elem_classes="center-text")
+        gr.Markdown("## 基于人工智能的室内空间设计与风格调整系统", elem_classes="center-text")
         
         # 定义房间类型和风格主题选项
         room_types = [
