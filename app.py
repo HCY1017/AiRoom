@@ -823,11 +823,11 @@ def create_interface():
         }
         .similar-image:hover {
             transform: scale(1.05);
-            box-shadow: 0 0 10px rgba(0,0,0,0.2);
-        }
+            box-shadow: 0 0 10px rgba(0,0,0,0.2);        }
         /* 相似图像结果滚动窗口样式 */
         .similar-results-container {
-            max-height: 600px;
+            max-height: 1000px;
+            min-height: 900px;
             overflow-y: auto;
             padding: 10px;
             border: 1px solid #eee;
